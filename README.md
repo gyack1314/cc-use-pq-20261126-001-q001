@@ -34,4 +34,28 @@ python -m compileall -q strata
 - `/operations/reconcile` 可核对未入目录的物理文件，默认只读。`/operations/staging-cleanup` 清理中断写入的临时文件。
 - `/operations/audit` 检查目录中的版本链、保留、清单和收据关系。介质字节另由扫描验证。`/events` 可查库级事件或按馆藏过滤。
 
+## 分卷交割
+
+容量受限或分批到达的载体可以用分卷交割送出已发布版本。馆员选定馆藏与版本，给出每卷最大字节数：
+
+```bash
+curl -X POST http://127.0.0.1:8080/shipments \
+  -H 'Content-Type: application/json' \
+  -d '{"collection":"ridge","revision":1,"max_volume_bytes":4194304}'
+```
+
+系统把该版本的逻辑字节流（按清单路径排序的文件顺序拼接）确定性地切成定长卷，因此单个大文件可以跨任意多卷。返回的 `id` 是交割编号，`credential`/`token` 是收货凭据；`volumes[]` 给出每卷的 `number`（1 基，另附 0 基 `index`）、`start`/`size` 与 `sha256`。同一交割重寄时这些编号和摘要保持不变。卷字节由 `GET /shipments/{id}/volumes/{number}` 按需从介质流式校验并送出，发送端只缓冲当前一卷，不持久化整组卷。`/handovers`、`/consignments`、`/dispatches`、`/deliveries` 是同义资源前缀，也支持 `/collections/{c}/revisions/{n}/shipments` 嵌套写法。
+
+收货方可用 `GET /shipments/{id}/ticket` 取得含原版本清单的可信票据（JSON），连同载体目录在断网现场核对：
+
+```bash
+python -m strata.field volumes ticket.json --dir /media/carriers --extract ./restored
+```
+
+也可在代码中使用 `strata.field.shipment.verify_volumes(ticket, directory)`（别名 `verify_shipment`/`check_volumes`，亦可从 `strata.field.receive` 导入）。报告区分 `missing`、`invalid`（摘要不符）与已验证卷，并列出当前已能完整取回的 `complete_files`/`recoverable_files`；提供 `destination` 时仅在全套卷正确后按原清单逐文件校验并原子还原。载体文件可按 `volume-001.bin` 等命名，也可用卷摘要或任意文件名（按内容摘要匹配），或直接传入 `{卷号: 字节/路径}` 映射。
+
+接收站用 `POST /shipments/{id}/volumes/{number}/ack`（或 `/confirm`、`/sign`、直接 POST 该卷资源、顶层 `/receipts`）回报签收，可在 JSON 中带 `credential` 与接收方算出的 `sha256`。签收按卷幂等成行：重复回报、丢失回复后重试都返回同一状态，单卷摘要不符不会删除其他卷的有效签收。状态中 `sent_volumes`/`dispatched_volumes` 是档案库已发出（取过字节或登记过寄送）的卷，`acknowledged_volumes`/`confirmed_volumes` 是实际签收的卷，二者分别列出。
+
+登记交割会写入一条 `shipment-{id}` 保留固定，使版本即使超过 `retention_seconds` 也无法退役，保证最后一个未确认卷仍可补寄。全部卷签收（状态转为 `completed`）或 `DELETE /shipments/{id}` / `.../revoke` 明确撤销后，该固定立即释放，版本可照常退役回收；各卷签收证据与事件仍保留，`GET /shipments/{id}/receipts` 可查。
+
 大文件取回时，服务在同一次目录事务中核验并准备响应，完成后释放写锁并送出数据。准备过程会占用本机暂存空间。业务繁忙时客户端可在收到临时繁忙响应后按原令牌重试。

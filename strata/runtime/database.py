@@ -123,7 +123,81 @@ SCHEMA = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS events_by_collection ON events(collection,id)",
+    """
+    CREATE TABLE IF NOT EXISTS shipments(
+        id TEXT PRIMARY KEY,
+        collection TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        credential TEXT NOT NULL,
+        max_volume_bytes INTEGER NOT NULL CHECK(max_volume_bytes > 0),
+        total_bytes INTEGER NOT NULL CHECK(total_bytes >= 0),
+        volume_count INTEGER NOT NULL CHECK(volume_count > 0),
+        manifest_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('open','complete','revoked')),
+        hold_reference TEXT NOT NULL UNIQUE,
+        note TEXT,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        revoked_at INTEGER,
+        FOREIGN KEY(collection,revision) REFERENCES revisions(collection,number)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shipment_volumes(
+        shipment TEXT NOT NULL REFERENCES shipments(id),
+        number INTEGER NOT NULL,
+        ordinal INTEGER NOT NULL,
+        start_offset INTEGER NOT NULL,
+        end_offset INTEGER NOT NULL,
+        size INTEGER NOT NULL CHECK(size >= 0),
+        digest TEXT NOT NULL,
+        PRIMARY KEY(shipment,number),
+        UNIQUE(shipment,ordinal),
+        CHECK(number = ordinal + 1),
+        CHECK(end_offset > start_offset OR size = 0)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shipment_dispatches(
+        shipment TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        first_at INTEGER NOT NULL,
+        last_at INTEGER NOT NULL,
+        send_count INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY(shipment,number),
+        FOREIGN KEY(shipment,number) REFERENCES shipment_volumes(shipment,number)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shipment_acks(
+        shipment TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        first_at INTEGER NOT NULL,
+        last_at INTEGER NOT NULL,
+        repeat_count INTEGER NOT NULL DEFAULT 0,
+        reported_digest TEXT,
+        PRIMARY KEY(shipment,number),
+        FOREIGN KEY(shipment,number) REFERENCES shipment_volumes(shipment,number)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shipment_reports(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shipment TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        reported_digest TEXT,
+        detail TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS shipments_by_revision ON shipments(collection,revision,status)",
+    "CREATE INDEX IF NOT EXISTS shipment_reports_by_set ON shipment_reports(shipment,id)",
 )
+
+# Tables added by schema revision 2 (split-volume handovers). Version 1 catalogs
+# migrate by creating exactly these objects.
+MIGRATION_V2 = tuple(statement for statement in SCHEMA if "shipment" in statement)
 
 
 class Database:
@@ -133,12 +207,16 @@ class Database:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.transaction() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise RuntimeError(f"Unsupported vault catalog version {version}")
             if version == 0:
                 for statement in SCHEMA:
                     connection.execute(statement)
-                connection.execute("PRAGMA user_version=1")
+                connection.execute("PRAGMA user_version=2")
+            elif version == 1:
+                for statement in MIGRATION_V2:
+                    connection.execute(statement)
+                connection.execute("PRAGMA user_version=2")
 
     def now(self) -> int:
         return self.clock()

@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 from strata.httpio import JsonLimit, download, error_response, uploaded
 from strata.runtime.errors import VaultError
 from strata.runtime.vault import Vault
+from strata.delivery.http_routes import install_shipment_routes
 
 
 class CollectionInput(BaseModel):
@@ -169,5 +170,7 @@ def create_app(root: Path, *, clock=None) -> FastAPI:
     @app.get("/collections/{collection}/footprint")
     def footprint(collection: str):
         return vault.footprint.collection(collection)
+
+    install_shipment_routes(app, vault)
 
     return app

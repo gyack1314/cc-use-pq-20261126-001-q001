@@ -157,3 +157,15 @@ def _check_bytes(source: BinaryIO, entry, output: BinaryIO | None = None) -> Non
 def _sync_tree(root: Path) -> None:
     for directory, _, _ in os.walk(root, topdown=False):
         sync_directory(Path(directory))
+
+
+# 分卷交割核对与本模块的整包校验属于同一现场接收能力，提供导入别名。
+from strata.field.shipment import (  # noqa: E402
+    ShipmentVerifier,
+    verify_shipment,
+    verify_volumes,
+)
+
+verify_volume_set = verify_volumes
+check_volumes = verify_volumes
+inspect_volumes = verify_volumes

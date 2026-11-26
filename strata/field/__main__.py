@@ -7,6 +7,7 @@ from pathlib import Path
 from strata.field.check import check_parcel
 from strata.field.parcel import DEFAULT_PART, build_parcel, open_parcel
 from strata.field.receive import verify_package
+from strata.field.shipment import verify_volumes
 from strata.field.uplink import Client, Uplink
 from strata.runtime.errors import VaultError
 
@@ -43,6 +44,15 @@ def parser() -> argparse.ArgumentParser:
     receive.add_argument("--revision", required=True, type=int)
     receive.add_argument("--manifest-sha256", required=True)
     receive.add_argument("--extract", type=Path)
+
+    volumes = commands.add_parser("volumes", help="Verify transported split volumes offline and restore")
+    volumes.add_argument("ticket", type=Path, nargs="?", help="Shipment ticket JSON")
+    volumes.add_argument("--dir", dest="directory", type=Path, help="Directory holding received volume files")
+    volumes.add_argument("--received", type=Path, help="Optional explicit volume file or mapping directory")
+    volumes.add_argument("--extract", type=Path)
+    volumes.add_argument("--manifest-sha256", dest="manifest_sha256")
+    volumes.add_argument("--collection")
+    volumes.add_argument("--revision", type=int)
     return cli
 
 
@@ -62,6 +72,21 @@ def execute(options) -> dict:
         with Client(options.vault_url) as endpoint:
             return Uplink(endpoint).send(parcel, publish=not options.keep_open,
                                          maximum_parts=options.maximum_parts).as_dict()
+    if options.command == "volumes":
+        kwargs = {}
+        if options.directory is not None:
+            kwargs["directory"] = options.directory
+        if options.extract is not None:
+            kwargs["destination"] = options.extract
+        if options.manifest_sha256:
+            kwargs["expected_manifest"] = options.manifest_sha256
+        if options.collection:
+            kwargs["expected_collection"] = options.collection
+        if options.revision is not None:
+            kwargs["expected_revision"] = options.revision
+        if options.ticket is not None:
+            return verify_volumes(options.ticket, **kwargs).as_dict()
+        return verify_volumes(**kwargs).as_dict()
     return verify_package(
         options.package, expected_manifest=options.manifest_sha256,
         expected_collection=options.collection, expected_revision=options.revision,

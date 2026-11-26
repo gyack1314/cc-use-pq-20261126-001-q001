@@ -65,11 +65,45 @@ class Checkout:
 
 
 class Delivery:
+    # 允许经 Delivery 调用分卷交割操作的方法名别名。
+    _SHIPMENT_ALIASES = {
+        "register_shipment": "register", "create_shipment": "register",
+        "open_shipment": "register", "plan_shipment": "register",
+        "shipment": "get", "get_shipment": "get", "shipment_status": "status",
+        "describe_shipment": "get", "shipment_ticket": "ticket",
+        "shipment_volume": "prepare_volume", "fetch_shipment_volume": "prepare_volume",
+        "download_shipment_volume": "prepare_volume",
+        "resend_volume": "resend", "mark_volume_sent": "mark_sent",
+        "send_shipment": "mark_sent", "dispatch_shipment": "mark_sent",
+        "acknowledge_volume": "acknowledge", "ack_volume": "ack",
+        "confirm_volume": "acknowledge", "sign_volume": "sign",
+        "receive_volume": "acknowledge", "report_volume": "report_volume",
+        "acknowledge_all_volumes": "acknowledge_all",
+        "revoke_shipment": "revoke", "cancel_shipment": "cancel",
+        "shipment_receipts": "receipts",
+    }
+
     def __init__(self, db: Database, media: Media, scratch: Path):
         self.db = db
         self.media = media
         self.scratch = scratch
         scratch.mkdir(parents=True, exist_ok=True)
+
+    def __getattr__(self, name):
+        # 仅在常规属性未命中时调用；惰性构造 Shipments 以避免循环导入。
+        if name == "_shipments_service":
+            raise AttributeError(name)
+        from strata.delivery.shipments import Shipments
+        service = self.__dict__.get("_shipments_service")
+        if service is None:
+            service = Shipments(self.db, self.media, self.scratch)
+            self.__dict__["_shipments_service"] = service
+        if name in ("shipments", "handovers", "volume_delivery"):
+            return service
+        target_name = self._SHIPMENT_ALIASES.get(name, name)
+        if hasattr(service, target_name):
+            return getattr(service, target_name)
+        raise AttributeError(name)
 
     def _open_revision(self, connection, collection, number):
         row = revision_row(connection, collection, number)
